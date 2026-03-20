@@ -14,5 +14,6 @@ done
 mysql -h db -uroot -prootpwd -e "CREATE DATABASE IF NOT EXISTS boutikpro_ccf CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
 mysql -h db -uroot -prootpwd boutikpro_ccf < sql/01_schema.sql
 mysql -h db -uroot -prootpwd boutikpro_ccf < sql/02_seed.sql
+mysql -h db -uroot -prootpwd boutikpro_ccf < sql/student_upgrade.sql
 
-echo "Base initialisée."
+echo "Base initialisée avec les modifications étudiantes."
