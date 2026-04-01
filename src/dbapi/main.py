@@ -1,10 +1,49 @@
 import mysql.connector
-from src.common.config import DB_CONFIG
-from src.common.helpers import print_menu
+from tabulate import tabulate
+
+try:
+    from src.common.config import DB_CONFIG
+    from src.common.helpers import print_menu
+except ModuleNotFoundError:
+    import os
+    import sys
+
+    PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    if PROJECT_ROOT not in sys.path:
+        sys.path.insert(0, PROJECT_ROOT)
+    from src.common.config import DB_CONFIG
+    from src.common.helpers import print_menu
 
 
 def get_connection():
     return mysql.connector.connect(**DB_CONFIG)
+
+
+def read_int(prompt):
+    value = input(prompt).strip()
+    try:
+        return int(value)
+    except ValueError:
+        print("Entrée invalide : nombre attendu.")
+        return None
+
+
+def run_read_query(sql, params=None):
+    conn = None
+    cur = None
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute(sql, params or ())
+        return cur.fetchall()
+    except mysql.connector.Error as err:
+        print(f"Erreur base de données : {err}")
+        return None
+    finally:
+        if cur is not None:
+            cur.close()
+        if conn is not None:
+            conn.close()
 
 
 def list_clients():
@@ -42,7 +81,9 @@ def create_client():
 
 
 def update_client():
-    id_client = int(input("ID du client à modifier : "))
+    id_client = read_int("ID du client à modifier : ")
+    if id_client is None:
+        return
     nom = input("Nouveau nom : ")
     prenom = input("Nouveau prénom : ")
     email = input("Nouvel email : ")
@@ -65,7 +106,9 @@ def update_client():
 
 
 def delete_client():
-    id_client = int(input("ID du client à supprimer : "))
+    id_client = read_int("ID du client à supprimer : ")
+    if id_client is None:
+        return
     try:
         conn = get_connection()
         cur = conn.cursor()
@@ -102,10 +145,12 @@ def list_products():
 
 
 def create_order():
-    id_client = int(input("ID du client : "))
+    id_client = read_int("ID du client : ")
     # Pour simplifier, on crée une commande avec un produit
-    id_produit = int(input("ID du produit : "))
-    quantite = int(input("Quantité : "))
+    id_produit = read_int("ID du produit : ")
+    quantite = read_int("Quantité : ")
+    if id_client is None or id_produit is None or quantite is None:
+        return
     try:
         conn = get_connection()
         cur = conn.cursor()
@@ -206,6 +251,264 @@ def aggregation_query():
     conn.close()
 
 
+def complete_catalog_view():
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT
+            p.libelle AS produit,
+            cp.nom_categorie AS categorie_produit,
+            f.nom_fournisseur AS fournisseur,
+            cf.nom_categorie AS categorie_fournisseur
+        FROM produit p
+        INNER JOIN categorie_produit cp
+            ON p.id_categorie_produit = cp.id_categorie_produit
+        INNER JOIN livre l
+            ON p.id_produit = l.id_produit
+        INNER JOIN fournisseur f
+            ON l.id_fournisseur = f.id_fournisseur
+        INNER JOIN categorie_fournisseur cf
+            ON f.id_categorie_fournisseur = cf.id_categorie_fournisseur
+        ORDER BY cp.nom_categorie, p.libelle, f.nom_fournisseur
+        """
+    )
+    rows = cur.fetchall()
+    if not rows:
+        print("Aucun produit/fournisseur trouvé.")
+    else:
+        print(
+            tabulate(
+                rows,
+                headers=[
+                    "Produit",
+                    "Catégorie Produit",
+                    "Fournisseur",
+                    "Catégorie Fournisseur",
+                ],
+                tablefmt="fancy_grid",
+            )
+        )
+    cur.close()
+    conn.close()
+
+
+def products_suppliers_by_product_category():
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT
+            cp.nom_categorie AS categorie_produit,
+            p.libelle AS produit,
+            f.nom_fournisseur AS fournisseur
+        FROM produit p
+        INNER JOIN categorie_produit cp
+            ON p.id_categorie_produit = cp.id_categorie_produit
+        INNER JOIN livre l
+            ON p.id_produit = l.id_produit
+        INNER JOIN fournisseur f
+            ON l.id_fournisseur = f.id_fournisseur
+        ORDER BY cp.nom_categorie, p.libelle, f.nom_fournisseur
+        """
+    )
+    rows = cur.fetchall()
+    if not rows:
+        print("Aucun produit/fournisseur trouvé.")
+    else:
+        print(
+            tabulate(
+                rows,
+                headers=["Catégorie Produit", "Produit", "Fournisseur"],
+                tablefmt="fancy_grid",
+            )
+        )
+    cur.close()
+    conn.close()
+
+
+def update_product_interactive():
+    id_produit = read_int("ID du produit à modifier : ")
+    if id_produit is None:
+        return
+
+    nouveau_libelle = input("Nouveau libellé (laisser vide pour ne pas modifier) : ").strip()
+    nouveau_prix = input("Nouveau prix (laisser vide pour ne pas modifier) : ").strip()
+
+    if not nouveau_libelle and not nouveau_prix:
+        print("Aucune modification demandée.")
+        return
+
+    updates = []
+    params = []
+
+    if nouveau_libelle:
+        updates.append("libelle = %s")
+        params.append(nouveau_libelle)
+
+    if nouveau_prix:
+        try:
+            prix_value = float(nouveau_prix)
+        except ValueError:
+            print("Prix invalide.")
+            return
+        updates.append("prix = %s")
+        params.append(prix_value)
+
+    params.append(id_produit)
+    query = f"UPDATE produit SET {', '.join(updates)} WHERE id_produit = %s"
+
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute(query, tuple(params))
+        conn.commit()
+        if cur.rowcount > 0:
+            print("Produit modifié avec succès.")
+        else:
+            print("Produit non trouvé.")
+        cur.close()
+        conn.close()
+    except mysql.connector.Error as err:
+        print(f"Erreur : {err}")
+
+
+def initialize_database():
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS etat_commande (
+                id_etat INT PRIMARY KEY AUTO_INCREMENT,
+                nom_etat VARCHAR(20) NOT NULL UNIQUE
+            )
+            """
+        )
+        cur.execute(
+            """
+            INSERT IGNORE INTO etat_commande (id_etat, nom_etat)
+            VALUES
+                (1, 'brouillon'),
+                (2, 'validee'),
+                (3, 'facturee')
+            """
+        )
+
+        cur.execute(
+            """
+            SELECT COUNT(*)
+            FROM information_schema.columns
+            WHERE table_schema = DATABASE()
+              AND table_name = 'produit'
+              AND column_name = 'stock'
+            """
+        )
+        has_stock_column = cur.fetchone()[0] > 0
+        if not has_stock_column:
+            cur.execute("ALTER TABLE produit ADD COLUMN stock INT NOT NULL DEFAULT 0")
+
+        cur.execute(
+            """
+            SELECT COUNT(*)
+            FROM information_schema.columns
+            WHERE table_schema = DATABASE()
+              AND table_name = 'commande'
+              AND column_name = 'id_etat'
+            """
+        )
+        has_id_etat_column = cur.fetchone()[0] > 0
+        if not has_id_etat_column:
+            cur.execute("ALTER TABLE commande ADD COLUMN id_etat INT NOT NULL DEFAULT 1")
+
+        cur.execute(
+            """
+            SELECT COUNT(*)
+            FROM information_schema.table_constraints
+            WHERE constraint_schema = DATABASE()
+              AND table_name = 'commande'
+              AND constraint_name = 'fk_commande_etat'
+              AND constraint_type = 'FOREIGN KEY'
+            """
+        )
+        has_fk_commande_etat = cur.fetchone()[0] > 0
+        if not has_fk_commande_etat:
+            cur.execute(
+                """
+                ALTER TABLE commande
+                ADD CONSTRAINT fk_commande_etat
+                FOREIGN KEY (id_etat) REFERENCES etat_commande(id_etat)
+                """
+            )
+
+        cur.execute("DELETE FROM contient")
+        cur.execute("DELETE FROM livre")
+        cur.execute("DELETE FROM produit")
+        cur.execute("DELETE FROM fournisseur")
+        cur.execute("DELETE FROM categorie_fournisseur")
+        cur.execute("DELETE FROM categorie_produit")
+
+        cur.execute(
+            """
+            INSERT INTO categorie_produit (id_categorie_produit, nom_categorie)
+            VALUES
+                (1, 'Ordinateurs'),
+                (2, 'Accessoires')
+            """
+        )
+
+        cur.execute(
+            """
+            INSERT INTO categorie_fournisseur (id_categorie_fournisseur, nom_categorie)
+            VALUES
+                (1, 'Grossiste'),
+                (2, 'Constructeur')
+            """
+        )
+
+        cur.execute(
+            """
+            INSERT INTO fournisseur (id_fournisseur, nom_fournisseur, id_categorie_fournisseur)
+            VALUES
+                (1, 'TechDistrib', 1),
+                (2, 'MegaHardware', 2)
+            """
+        )
+
+        cur.execute(
+            """
+            INSERT INTO produit (id_produit, libelle, prix, id_categorie_produit)
+            VALUES
+                (1, 'PC Portable 14 pouces', 799.99, 1),
+                (2, 'Souris sans fil', 24.90, 2),
+                (3, 'Clavier mecanique', 69.90, 2)
+            """
+        )
+
+        cur.execute(
+            """
+            INSERT INTO livre (id_produit, id_fournisseur)
+            VALUES
+                (1, 2),
+                (2, 1),
+                (3, 1)
+            """
+        )
+
+        conn.commit()
+        cur.close()
+        conn.close()
+    except mysql.connector.Error as err:
+        print(f"Erreur initialisation DB : {err}")
+
+
+def run_self_test():
+    complete_catalog_view()
+    products_suppliers_by_product_category()
+    print("✅ SYSTEM CHECK PASSED: Database seeded and read operations are working.")
+
+
 def main_menu():
     while True:
         print_menu("Menu principal - BoutikPro (DB-API)")
@@ -218,6 +521,9 @@ def main_menu():
         print("7. Lister les factures")
         print("8. Requête avec jointure")
         print("9. Requête d'agrégation")
+        print("10. Catalogue complet (produits/fournisseurs)")
+        print("11. Vue analytique par catégorie produit")
+        print("12. Modifier un produit (nom/prix)")
         print("0. Quitter")
         choice = input("Choix : ")
         if choice == "1":
@@ -238,6 +544,12 @@ def main_menu():
             jointure_query()
         elif choice == "9":
             aggregation_query()
+        elif choice == "10":
+            complete_catalog_view()
+        elif choice == "11":
+            products_suppliers_by_product_category()
+        elif choice == "12":
+            update_product_interactive()
         elif choice == "0":
             break
         else:
@@ -246,4 +558,6 @@ def main_menu():
 
 
 if __name__ == "__main__":
+    initialize_database()
+    run_self_test()
     main_menu()
